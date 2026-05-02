@@ -15,12 +15,11 @@ except ImportError:
 
 st.set_page_config(page_title="간편 서명 시스템", layout="centered")
 
-# --- 세션 상태 초기화 ---
+# --- 로그인 로직 ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
 
-# --- 구글 드라이브 업로드 함수 ---
 def upload_to_gdrive(img_data, file_name, creds_json, folder_id):
     try:
         info = json.loads(creds_json)
@@ -34,7 +33,6 @@ def upload_to_gdrive(img_data, file_name, creds_json, folder_id):
         return False, str(e)
 
 
-# --- 로그인 로직 ---
 if not st.session_state['logged_in']:
     st.title("📱 상담사 로그인")
     with st.form("login"):
@@ -47,71 +45,63 @@ if not st.session_state['logged_in']:
             else:
                 st.error("정보가 올바르지 않습니다.")
 else:
-    st.title("🖋️ 단일 서명 시스템")
+    st.title("🖋️ 통합 서명 시스템")
 
-    with st.sidebar:
-        st.header("⚙️ 드라이브 설정")
-        g_json = st.text_area("서비스 계정 JSON", height=150)
-        g_folder = st.text_input("폴더 ID (URL 뒷부분)")
+    # --- [섹션 1] 구글 드라이브 설정 (사이드바가 아닌 창 내부에 배치) ---
+    with st.expander("⚙️ 구글 드라이브 설정 (최초 1회 설정)", expanded=False):
+        st.info("구글 클라우드에서 발급받은 서비스 계정 JSON 전체 내용과 폴더 ID를 입력하세요.")
+        g_json = st.text_area("서비스 계정 JSON", height=200, placeholder='{"type": "service_account", ...}')
+        g_folder = st.text_input("폴더 ID", placeholder="예: 1aBcDeFgHiJkLmNoPqRsTuVwXyZ")
 
-    # 1. 파일 업로드
-    bg_file = st.file_uploader("📄 문서 이미지 업로드", type=['png', 'jpg', 'jpeg'])
+    st.divider()
+
+    # --- [섹션 2] 문서 업로드 및 서명 ---
+    st.subheader("1️⃣ 서명하기")
+    bg_file = st.file_uploader("서명할 문서(이미지)를 업로드하세요", type=['png', 'jpg', 'jpeg'])
 
     if bg_file:
-        # 이미지 읽기 및 크기 계산
         img_data = bg_file.read()
         img = Image.open(io.BytesIO(img_data)).convert("RGB")
-
-        # 화면에 맞게 리사이즈 비율 계산
         CW = 700
         CH = int(CW * img.height / img.width)
 
-        # 배경 이미지 base64 변환 (JS 전송용)
         buf = io.BytesIO()
         img.resize((CW, CH)).save(buf, format="PNG")
         bg_b64 = base64.b64encode(buf.getvalue()).decode()
 
-        st.info("검정색으로 서명한 후 [서명 완료] 버튼을 눌러주세요.")
-
-        # --- HTML/JS 캔버스 (이름 변수 제거) ---
+        # HTML/JS 캔버스
         canvas_html = f"""
-        <div style="position:relative; width:{CW}px; height:{CH}px; border:2px solid #333;">
+        <div style="position:relative; width:{CW}px; height:{CH}px; border:2px solid #333; margin: 0 auto;">
             <img id="bg" src="data:image/png;base64,{bg_b64}" style="position:absolute; width:100%; height:100%; user-select:none;">
             <canvas id="c" width="{CW}" height="{CH}" style="position:absolute; cursor:crosshair;"></canvas>
         </div>
-        <br>
-        <button onclick="process()" style="padding:12px 24px; background:#27ae60; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">✅ 서명 완료 (파일 다운로드)</button>
-        <button onclick="clr()" style="padding:12px 24px; background:#e74c3c; color:white; border:none; border-radius:5px; cursor:pointer; margin-left:10px;">🗑️ 초기화</button>
-
+        <div style="text-align: center; margin-top: 20px;">
+            <button onclick="process()" style="padding:12px 24px; background:#27ae60; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">💾 서명 완료 (내 PC 저장)</button>
+            <button onclick="clr()" style="padding:12px 24px; background:#e74c3c; color:white; border:none; border-radius:5px; cursor:pointer; margin-left:10px;">🗑️ 초기화</button>
+        </div>
         <script>
             const v=document.getElementById('c'), x=v.getContext('2d');
             const bg=document.getElementById('bg');
-            x.strokeStyle='#000000'; 
-            x.lineWidth=3;
+            x.strokeStyle='#000000'; x.lineWidth=3;
             let d=0;
-
             const getPos = e => {{
                 const r=v.getBoundingClientRect();
                 const t=e.touches ? e.touches[0] : e;
                 return [t.clientX-r.left, t.clientY-r.top];
             }};
-
             v.onmousedown=e=>{{d=1; [lx,ly]=getPos(e);}};
             v.onmousemove=e=>{{if(!d)return; const[nx,ny]=getPos(e); x.beginPath(); x.moveTo(lx,ly); x.lineTo(nx,ny); x.stroke(); [lx,ly]=[nx,ny];}};
             v.onmouseup=()=>d=0;
             v.ontouchstart=e=>{{d=1; [lx,ly]=getPos(e); e.preventDefault();}};
             v.ontouchmove=e=>{{if(!d)return; const[nx,ny]=getPos(e); x.beginPath(); x.moveTo(lx,ly); x.lineTo(nx,ny); x.stroke(); [lx,ly]=[nx,ny]; e.preventDefault();}};
             v.ontouchend=()=>d=0;
-
             function clr() {{ x.clearRect(0,0,v.width,v.height); }}
-
             function process() {{
                 const out = document.createElement('canvas');
                 out.width = v.width; out.height = v.height;
                 const ctx = out.getContext('2d');
                 ctx.drawImage(bg, 0, 0, out.width, out.height);
                 ctx.drawImage(v, 0, 0);
-
                 const a = document.createElement('a');
                 a.href = out.toDataURL('image/png');
                 a.download = 'signed_document.png';
@@ -121,17 +111,26 @@ else:
         """
         import streamlit.components.v1 as components
 
-        components.html(canvas_html, height=CH + 150)
+        components.html(canvas_html, height=CH + 100)
 
         st.divider()
-        final_file = st.file_uploader("📥 다운로드된 파일을 여기에 드롭하여 구글 드라이브로 전송", type='png')
 
-        if final_file and g_json and g_folder:
-            if st.button("🚀 구글 드라이브에 최종 저장"):
-                with st.spinner("저장 중..."):
+        # --- [섹션 3] 구글 드라이브 전송 ---
+        st.subheader("2️⃣ 구글 드라이브로 전송")
+        final_file = st.file_uploader("위에서 다운로드한 'signed_document.png' 파일을 여기에 드래그하세요", type='png',
+                                      key="final_uploader")
+
+        if st.button("📤 전송 시작", use_container_width=True):
+            if not final_file:
+                st.error("전송할 파일을 업로드해주세요.")
+            elif not g_json or not g_folder:
+                st.error("상단의 '구글 드라이브 설정'을 완료해주세요.")
+            else:
+                with st.spinner("업로드 중..."):
                     fname = f"signed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                     ok, msg = upload_to_gdrive(final_file.read(), fname, g_json, g_folder)
                     if ok:
-                        st.success(f"저장 성공! (파일명: {fname})")
+                        st.success(f"성공적으로 저장되었습니다! (파일명: {fname})")
+                        st.balloons()
                     else:
-                        st.error(f"저장 실패: {msg}")
+                        st.error(f"실패: {msg}")
