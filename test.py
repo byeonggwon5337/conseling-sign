@@ -103,7 +103,7 @@ else:
             st.info("1. 아래 캔버스에 서명 후 [저장] 하세요. 2. 다운로드된 파일을 아래 업로드함에 넣으세요.")
 
             # --- HTML 캔버스 ---
-            b# --- HTML 캔버스 (배경+서명 합본 저장 버전) ---
+            # --- HTML 캔버스 (배경+서명 합본 저장 버전) ---
             bg_b64 = pil_to_b64(combined.convert("RGB"))
             canvas_html = f"""
             <div style="position:relative; width:{CW}px; height:{CH}px; border:2px solid #000;">
