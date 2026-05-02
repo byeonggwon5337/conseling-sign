@@ -4,9 +4,8 @@ from reportlab.pdfgen import canvas
 from PIL import Image
 import io
 
-st.set_page_config(page_title="문서 위 직접 서명 시스템", layout="centered")
+st.set_page_config(page_title="서명 시스템", layout="centered")
 
-# --- 로그인 세션 ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
@@ -23,60 +22,53 @@ else:
     st.title("🖋️ 문서 위 직접 서명")
 
     # 1. 파일 업로드
-    st.subheader("1. 서명할 문서 업로드")
-    bg_file = st.file_uploader("상담 양식 이미지를 업로드하세요", type=['png', 'jpg', 'jpeg'])
+    bg_file = st.file_uploader("상담 양식 이미지를 업로드하세요", type=['png', 'jpg', 'jpeg'], key="file_uploader")
 
     if bg_file:
-        # 이미지를 처리하여 세션에 저장 (매번 새로 로드하지 않도록 함)
-        if 'bg_image' not in st.session_state or st.session_state.get('last_uploaded') != bg_file.name:
-            img = Image.open(bg_file).convert("RGB")
-            # 가로 600px 고정 비율 리사이즈
-            w, h = img.size
-            canvas_width = 600
-            canvas_height = int(canvas_width * (h / w))
-            st.session_state['bg_image'] = img.resize((canvas_width, canvas_height))
-            st.session_state['canvas_h'] = canvas_height
-            st.session_state['last_uploaded'] = bg_file.name
+        # 이미지 로드 (캐싱 없이 즉시 처리)
+        img = Image.open(bg_file).convert("RGB")
 
-        st.subheader("2. 문서 위에 직접 작성 및 서명")
+        # 가로 600px 기준 비율 조정
+        w, h = img.size
+        canvas_width = 600
+        canvas_height = int(canvas_width * (h / w))
+        bg_image_resized = img.resize((canvas_width, canvas_height))
 
-        # 2. 캔버스 그리기
-        # background_image에 세션에 저장된 이미지를 직접 전달
+        st.write("---")
+        st.subheader("아래 문서 위에 서명해 주세요")
+
+        # 2. 캔버스 (가장 안정적인 설정)
         canvas_result = st_canvas(
             fill_color="rgba(255, 165, 0, 0.3)",
-            stroke_width=2,
+            stroke_width=3,
             stroke_color="#0000ff",
-            background_image=st.session_state['bg_image'],
+            background_image=bg_image_resized,
             update_streamlit=True,
-            height=st.session_state['canvas_h'],
-            width=600,
+            height=canvas_height,
+            width=canvas_width,
             drawing_mode="freedraw",
-            key="canvas_signature",
+            key="canvas_main",
         )
 
-        # 3. PDF 저장 버튼
+        # 3. PDF 저장
         if st.button("서명 완료 및 PDF 생성"):
             if canvas_result.image_data is not None:
-                # 서명 레이어 (RGBA)
                 sign_layer = Image.fromarray(canvas_result.image_data.astype('uint8'), 'RGBA')
-
-                # 배경 이미지 위에 서명 합성
-                final_combined = st.session_state['bg_image'].convert("RGBA")
+                final_combined = bg_image_resized.convert("RGBA")
                 final_combined = Image.alpha_composite(final_combined, sign_layer)
 
                 buffer = io.BytesIO()
-                # 합성된 이미지를 PDF로 변환 (RGB로 다시 변환 필요)
-                p = canvas.Canvas(buffer, pagesize=(600, st.session_state['canvas_h']))
-                p.drawInlineImage(final_combined.convert("RGB"), 0, 0, width=600, height=st.session_state['canvas_h'])
+                p = canvas.Canvas(buffer, pagesize=(canvas_width, canvas_height))
+                p.drawInlineImage(final_combined.convert("RGB"), 0, 0, width=canvas_width, height=canvas_height)
                 p.showPage()
                 p.save()
 
-                st.success("문서가 완성되었습니다!")
+                st.success("완성되었습니다!")
                 st.download_button(
-                    label="📥 완성된 PDF 다운로드",
+                    label="📥 PDF 다운로드",
                     data=buffer.getvalue(),
-                    file_name="signed_document.pdf",
+                    file_name="signed_doc.pdf",
                     mime="application/pdf"
                 )
     else:
-        st.info("먼저 상담 양식 사진을 업로드해 주세요.")
+        st.info("파일을 업로드하면 아래에 서명창이 나타납니다.")
