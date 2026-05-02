@@ -103,35 +103,56 @@ else:
             st.info("1. 아래 캔버스에 서명 후 [저장] 하세요. 2. 다운로드된 파일을 아래 업로드함에 넣으세요.")
 
             # --- HTML 캔버스 ---
+            b# --- HTML 캔버스 (배경+서명 합본 저장 버전) ---
             bg_b64 = pil_to_b64(combined.convert("RGB"))
             canvas_html = f"""
             <div style="position:relative; width:{CW}px; height:{CH}px; border:2px solid #000;">
-                <img src="data:image/png;base64,{bg_b64}" style="position:absolute; width:100%; height:100%;">
+                <img id="bg" src="data:image/png;base64,{bg_b64}" style="position:absolute; width:100%; height:100%; user-select:none;">
                 <canvas id="c" width="{CW}" height="{CH}" style="position:absolute; cursor:crosshair;"></canvas>
             </div>
             <br>
-            <button onclick="save()" style="padding:10px; background:#27ae60; color:white; border:none; border-radius:5px;">💾 서명 이미지 저장 (signature.png)</button>
+            <button onclick="save()" style="padding:10px; background:#27ae60; color:white; border:none; border-radius:5px; font-weight:bold;">💾 서명 포함 이미지 저장</button>
             <button onclick="clr()" style="padding:10px; background:#e74c3c; color:white; border:none; border-radius:5px;">🗑️ 초기화</button>
+            
             <script>
                 const v=document.getElementById('c'), x=v.getContext('2d');
+                const bgImg=document.getElementById('bg');
                 x.strokeStyle='#ff0000'; x.lineWidth=3;
-                let d=0;
+                let d=0, lx, ly;
+
                 const getP = e => {{
                     const r=v.getBoundingClientRect();
                     const t=e.touches?e.touches[0]:e;
                     return [t.clientX-r.left, t.clientY-r.top];
                 }};
+
                 v.onmousedown=e=>{{d=1; [lx,ly]=getP(e);}};
                 v.onmousemove=e=>{{if(!d)return; const[nx,ny]=getP(e); x.beginPath(); x.moveTo(lx,ly); x.lineTo(nx,ny); x.stroke(); [lx,ly]=[nx,ny];}};
                 v.onmouseup=()=>d=0;
                 v.ontouchstart=e=>{{d=1; [lx,ly]=getP(e); e.preventDefault();}};
                 v.ontouchmove=e=>{{if(!d)return; const[nx,ny]=getP(e); x.beginPath(); x.moveTo(lx,ly); x.lineTo(nx,ny); x.stroke(); [lx,ly]=[nx,ny]; e.preventDefault();}};
                 v.ontouchend=()=>d=0;
+
                 function clr() {{ x.clearRect(0,0,v.width,v.height); }}
+
                 function save() {{
-                    const a=document.createElement('a');
-                    a.href=v.toDataURL('image/png');
-                    a.download='signature.png'; a.click();
+                    // 1. 임시 합성용 캔버스 생성
+                    const out = document.createElement('canvas');
+                    out.width = v.width;
+                    out.height = v.height;
+                    const ctxOut = out.getContext('2d');
+
+                    // 2. 배경 이미지 먼저 그리기
+                    ctxOut.drawImage(bgImg, 0, 0, out.width, out.height);
+                    
+                    // 3. 그 위에 현재 서명 캔버스 덮어씌우기
+                    ctxOut.drawImage(v, 0, 0);
+
+                    // 4. 합쳐진 이미지 다운로드
+                    const a = document.createElement('a');
+                    a.href = out.toDataURL('image/png');
+                    a.download = 'signature_combined.png'; 
+                    a.click();
                 }}
             </script>
             """
