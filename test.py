@@ -15,11 +15,9 @@ except ImportError:
 
 st.set_page_config(page_title="간편 서명 시스템", layout="centered")
 
-# --- 세션 상태 초기화 (이미지 고정용) ---
+# --- 세션 상태 초기화 ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
-if 'active_img' not in st.session_state:
-    st.session_state['active_img'] = None
 
 
 # --- 구글 드라이브 업로드 함수 ---
@@ -55,33 +53,29 @@ else:
         st.header("⚙️ 드라이브 설정")
         g_json = st.text_area("서비스 계정 JSON", height=150)
         g_folder = st.text_input("폴더 ID (URL 뒷부분)")
-        if st.button("처음부터 다시 시작 (이미지 삭제)"):
-            st.session_state['active_img'] = None
-            st.rerun()
 
-    # 1. 파일 업로드 (업로드 즉시 세션에 저장)
+    # 1. 파일 업로드
     bg_file = st.file_uploader("📄 문서 이미지 업로드", type=['png', 'jpg', 'jpeg'])
+
     if bg_file:
-        st.session_state['active_img'] = bg_file.read()
+        # 이미지 읽기 및 크기 계산
+        img_data = bg_file.read()
+        img = Image.open(io.BytesIO(img_data)).convert("RGB")
 
-    signer_name = st.text_input("✏️ 서명자 이름")
-
-    # 세션에 이미지가 있을 때만 캔버스 표시
-    if st.session_state['active_img'] and signer_name:
-        img = Image.open(io.BytesIO(st.session_state['active_img'])).convert("RGB")
+        # 화면에 맞게 리사이즈 비율 계산
         CW = 700
         CH = int(CW * img.height / img.width)
 
-        # 배경 이미지 base64 변환
+        # 배경 이미지 base64 변환 (JS 전송용)
         buf = io.BytesIO()
         img.resize((CW, CH)).save(buf, format="PNG")
         bg_b64 = base64.b64encode(buf.getvalue()).decode()
 
         st.info("검정색으로 서명한 후 [서명 완료] 버튼을 눌러주세요.")
 
-        # --- HTML/JS 캔버스 ---
+        # --- HTML/JS 캔버스 (이름 변수 제거) ---
         canvas_html = f"""
-        <div style="position:relative; width:{CW}px; height:{CH}px; border:2px solid #000;">
+        <div style="position:relative; width:{CW}px; height:{CH}px; border:2px solid #333;">
             <img id="bg" src="data:image/png;base64,{bg_b64}" style="position:absolute; width:100%; height:100%; user-select:none;">
             <canvas id="c" width="{CW}" height="{CH}" style="position:absolute; cursor:crosshair;"></canvas>
         </div>
@@ -92,7 +86,7 @@ else:
         <script>
             const v=document.getElementById('c'), x=v.getContext('2d');
             const bg=document.getElementById('bg');
-            x.strokeStyle='#000000'; // 검정색 서명
+            x.strokeStyle='#000000'; 
             x.lineWidth=3;
             let d=0;
 
@@ -120,7 +114,7 @@ else:
 
                 const a = document.createElement('a');
                 a.href = out.toDataURL('image/png');
-                a.download = '{signer_name}_signed.png';
+                a.download = 'signed_document.png';
                 a.click();
             }}
         </script>
@@ -130,12 +124,12 @@ else:
         components.html(canvas_html, height=CH + 150)
 
         st.divider()
-        final_file = st.file_uploader("📥 다운로드된 파일을 여기에 드롭하세요", type='png')
+        final_file = st.file_uploader("📥 다운로드된 파일을 여기에 드롭하여 구글 드라이브로 전송", type='png')
 
         if final_file and g_json and g_folder:
             if st.button("🚀 구글 드라이브에 최종 저장"):
                 with st.spinner("저장 중..."):
-                    fname = f"{signer_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    fname = f"signed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                     ok, msg = upload_to_gdrive(final_file.read(), fname, g_json, g_folder)
                     if ok:
                         st.success(f"저장 성공! (파일명: {fname})")
