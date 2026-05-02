@@ -1,28 +1,21 @@
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
+import streamlit.components.v1 as components
 from reportlab.pdfgen import canvas as rl_canvas
 from reportlab.lib.utils import ImageReader
 from PIL import Image
-import io, base64
+import io, base64, urllib.parse
 
 st.set_page_config(page_title="서명 시스템", layout="centered")
 
 # ── 세션 초기화 ─────────────────────────────────────────────
-for k, v in {
-    'logged_in': False,
-    'img_bytes': None,
-    'prev_file_name': None,
-    'canvas_key_idx': 0,
-}.items():
+for k, v in {'logged_in': False, 'img_bytes': None, 'prev_file': None, 'merged_b64': None}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-
-def pil_to_b64(pil_img: Image.Image) -> str:
+def pil_to_b64(img: Image.Image) -> str:
     buf = io.BytesIO()
-    pil_img.save(buf, format="PNG")
+    img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
-
 
 # ── 로그인 ──────────────────────────────────────────────────
 if not st.session_state['logged_in']:
@@ -41,132 +34,122 @@ if not st.session_state['logged_in']:
 else:
     st.title("🖋️ 문서 위 직접 서명")
 
-    bg_file = st.file_uploader(
-        "상담 양식 이미지를 업로드하세요 (PNG / JPG)",
-        type=['png', 'jpg', 'jpeg'],
-    )
+    bg_file = st.file_uploader("상담 양식 이미지 업로드 (PNG / JPG)", type=['png','jpg','jpeg'])
 
-    # 새 파일 감지 → 세션 저장 + 캔버스 key 갱신
-    if bg_file is not None and bg_file.name != st.session_state['prev_file_name']:
+    if bg_file and bg_file.name != st.session_state['prev_file']:
         st.session_state['img_bytes'] = bg_file.read()
-        st.session_state['prev_file_name'] = bg_file.name
-        st.session_state['canvas_key_idx'] += 1
+        st.session_state['prev_file'] = bg_file.name
+        st.session_state['merged_b64'] = None
 
-    if st.session_state['img_bytes'] is not None:
-        # ── 이미지 준비 ─────────────────────────────────────
+    if st.session_state['img_bytes']:
         img = Image.open(io.BytesIO(st.session_state['img_bytes'])).convert("RGB")
-        w, h = img.size
-        CANVAS_W = 700
-        CANVAS_H = int(CANVAS_W * h / w)
-        bg_resized = img.resize((CANVAS_W, CANVAS_H), Image.LANCZOS)
+        W, H = img.size
+        CW = 700
+        CH = int(CW * H / W)
+        bg_resized = img.resize((CW, CH), Image.LANCZOS)
         bg_b64 = pil_to_b64(bg_resized)
 
-        st.markdown("**✏️ 문서 위에 직접 서명하세요** (마우스 또는 터치)")
+        # ── 합성 결과 수신용 hidden input ───────────────────
+        merged_input = st.text_input("__merged__", value="", key="merged_recv", label_visibility="collapsed")
+        if merged_input.startswith("data:image"):
+            st.session_state['merged_b64'] = merged_input
 
-        canvas_key = f"canvas_{st.session_state['canvas_key_idx']}"
+        # ── 순수 HTML 캔버스 (문서 위에 서명) ───────────────
+        html = f"""
+<!DOCTYPE html><html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#f0f2f6;display:flex;flex-direction:column;align-items:center;padding:8px;font-family:sans-serif}}
+#wrap{{position:relative;width:{CW}px;height:{CH}px;border:2px solid #4a90e2;border-radius:8px;overflow:hidden;cursor:crosshair;touch-action:none;box-shadow:0 2px 12px rgba(0,0,0,.15)}}
+#bgImg{{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;user-select:none}}
+#sigCanvas{{position:absolute;top:0;left:0;width:{CW}px;height:{CH}px}}
+.btns{{margin-top:10px;display:flex;gap:10px}}
+button{{padding:10px 22px;border:none;border-radius:6px;font-size:15px;font-weight:700;cursor:pointer}}
+#btnClear{{background:#e74c3c;color:#fff}}
+#btnSave{{background:#27ae60;color:#fff}}
+#msg{{margin-top:8px;font-size:13px;color:#27ae60;font-weight:600;min-height:20px}}
+</style></head><body>
 
-        # ── st_canvas 호출 ──────────────────────────────────
-        canvas_result = st_canvas(
-            fill_color="rgba(0,0,0,0)",
-            stroke_width=3,
-            stroke_color="#0000cc",
-            background_image=bg_resized,   # PIL Image → 배경
-            update_streamlit=True,
-            height=CANVAS_H,
-            width=CANVAS_W,
-            drawing_mode="freedraw",
-            key=canvas_key,
-        )
+<div id="wrap">
+  <img id="bgImg" src="data:image/png;base64,{bg_b64}" draggable="false"/>
+  <canvas id="sigCanvas" width="{CW}" height="{CH}"></canvas>
+</div>
+<div class="btns">
+  <button id="btnClear" onclick="clearSig()">🗑️ 초기화</button>
+  <button id="btnSave"  onclick="saveSig()">✅ 서명 저장</button>
+</div>
+<div id="msg"></div>
 
-        # ── 배경이 안 뜨는 버그 패치: JS로 직접 주입 ────────
-        # st_canvas가 내부적으로 만드는 <canvas> 배경을 JS로 강제 설정
-        patch_js = f"""
 <script>
-(function injectBg() {{
-  const b64 = "data:image/png;base64,{bg_b64}";
-  const img = new Image();
-  img.onload = function() {{
-    // st_canvas는 fabric.js 캔버스를 씀 → lowerCanvasEl이 배경 레이어
-    function trySet() {{
-      const canvases = document.querySelectorAll('canvas');
-      let found = false;
-      canvases.forEach(cv => {{
-        // 크기가 일치하는 캔버스가 배경 레이어
-        if (cv.width === {CANVAS_W} && cv.height === {CANVAS_H}) {{
-          const ctx = cv.getContext('2d');
-          if (ctx) {{
-            ctx.save();
-            ctx.globalCompositeOperation = 'destination-over';
-            ctx.drawImage(img, 0, 0, {CANVAS_W}, {CANVAS_H});
-            ctx.restore();
-            found = true;
-          }}
-        }}
-      }});
-      if (!found) setTimeout(trySet, 300);
+const cv = document.getElementById('sigCanvas');
+const ctx = cv.getContext('2d');
+ctx.strokeStyle='#0000cc'; ctx.lineWidth=3; ctx.lineCap='round'; ctx.lineJoin='round';
+let drawing=false, lx=0, ly=0;
+
+function pos(e){{
+  const r=cv.getBoundingClientRect();
+  const sx=cv.width/r.width, sy=cv.height/r.height;
+  if(e.touches) return [(e.touches[0].clientX-r.left)*sx,(e.touches[0].clientY-r.top)*sy];
+  return [(e.clientX-r.left)*sx,(e.clientY-r.top)*sy];
+}}
+cv.addEventListener('mousedown', e=>{{drawing=true;[lx,ly]=pos(e)}});
+cv.addEventListener('mousemove', e=>{{if(!drawing)return;const[x,y]=pos(e);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(x,y);ctx.stroke();[lx,ly]=[x,y]}});
+cv.addEventListener('mouseup',   ()=>drawing=false);
+cv.addEventListener('mouseleave',()=>drawing=false);
+cv.addEventListener('touchstart',e=>{{e.preventDefault();drawing=true;[lx,ly]=pos(e)}},{{passive:false}});
+cv.addEventListener('touchmove', e=>{{if(!drawing)return;e.preventDefault();const[x,y]=pos(e);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(x,y);ctx.stroke();[lx,ly]=[x,y]}},{{passive:false}});
+cv.addEventListener('touchend',  ()=>drawing=false);
+
+function clearSig(){{ctx.clearRect(0,0,cv.width,cv.height);document.getElementById('msg').textContent='';}}
+
+function saveSig(){{
+  const merged=document.createElement('canvas');
+  merged.width={CW}; merged.height={CH};
+  const mc=merged.getContext('2d');
+  mc.drawImage(document.getElementById('bgImg'),0,0,{CW},{CH});
+  mc.drawImage(cv,0,0);
+  const dataURL=merged.toDataURL('image/png');
+
+  // Streamlit hidden input에 값 전달
+  const inputs=window.parent.document.querySelectorAll('input[type=text]');
+  inputs.forEach(inp=>{{
+    if(inp.value===''||inp.value.startsWith('data:image')){{
+      const nativeInputValueSetter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+      nativeInputValueSetter.call(inp,dataURL);
+      inp.dispatchEvent(new Event('input',{{bubbles:true}}));
     }}
-    trySet();
-  }};
-  img.src = b64;
-
-  // 매 1초마다 재주입 (rerun 후에도 유지)
-  setInterval(() => {{
-    const canvases = document.querySelectorAll('canvas');
-    canvases.forEach(cv => {{
-      if (cv.width === {CANVAS_W} && cv.height === {CANVAS_H}) {{
-        const ctx = cv.getContext('2d');
-        if (ctx) {{
-          ctx.save();
-          ctx.globalCompositeOperation = 'destination-over';
-          ctx.drawImage(img, 0, 0, {CANVAS_W}, {CANVAS_H});
-          ctx.restore();
-        }}
-      }}
-    }});
-  }}, 1000);
-}})();
+  }});
+  document.getElementById('msg').textContent='✅ 서명이 저장되었습니다! 아래 버튼을 눌러 PDF를 생성하세요.';
+}}
 </script>
+</body></html>
 """
-        st.markdown(patch_js, unsafe_allow_html=True)
+        components.html(html, height=CH + 100, scrolling=False)
 
-        # ── 버튼 ────────────────────────────────────────────
+        st.markdown("---")
         col1, col2 = st.columns(2)
 
         with col1:
-            if st.button("🗑️ 서명 초기화"):
-                st.session_state['canvas_key_idx'] += 1
+            if st.button("🔄 페이지 새로고침 (초기화)"):
+                st.session_state['merged_b64'] = None
                 st.rerun()
 
         with col2:
-            if st.button("✅ 서명 완료 및 PDF 생성"):
-                if canvas_result.image_data is not None:
-                    # 서명 레이어(RGBA) + 원본 이미지 합성
-                    sign_layer = Image.fromarray(
-                        canvas_result.image_data.astype('uint8'), 'RGBA'
-                    )
-                    final = Image.alpha_composite(
-                        bg_resized.convert("RGBA"), sign_layer
-                    ).convert("RGB")
-
+            if st.button("📄 PDF 생성"):
+                mb64 = st.session_state.get('merged_b64')
+                if mb64 and mb64.startswith("data:image"):
+                    raw = base64.b64decode(mb64.split(",",1)[1])
+                    merged_img = Image.open(io.BytesIO(raw)).convert("RGB")
                     pdf_buf = io.BytesIO()
-                    c = rl_canvas.Canvas(pdf_buf, pagesize=(CANVAS_W, CANVAS_H))
-                    img_buf = io.BytesIO()
-                    final.save(img_buf, format="PNG")
-                    img_buf.seek(0)
-                    c.drawImage(ImageReader(img_buf), 0, 0,
-                                width=CANVAS_W, height=CANVAS_H)
-                    c.showPage()
-                    c.save()
-
-                    st.success("서명이 완료되었습니다!")
-                    st.download_button(
-                        "📥 PDF 다운로드",
-                        data=pdf_buf.getvalue(),
-                        file_name="signed_doc.pdf",
-                        mime="application/pdf",
-                    )
+                    c = rl_canvas.Canvas(pdf_buf, pagesize=(CW, CH))
+                    ib = io.BytesIO(); merged_img.save(ib, format="PNG"); ib.seek(0)
+                    c.drawImage(ImageReader(ib), 0, 0, width=CW, height=CH)
+                    c.showPage(); c.save()
+                    st.success("PDF 생성 완료!")
+                    st.download_button("📥 PDF 다운로드", data=pdf_buf.getvalue(),
+                                       file_name="signed_doc.pdf", mime="application/pdf")
                 else:
-                    st.warning("먼저 캔버스에 서명해 주세요.")
-
+                    st.warning("캔버스에서 서명 후 '✅ 서명 저장' 버튼을 먼저 눌러주세요.")
     else:
         st.info("⬆️ 파일을 업로드하면 문서 위에 서명창이 나타납니다.")
